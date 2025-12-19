@@ -9,26 +9,30 @@ st.set_page_config(page_title="Stock Checking App", layout="wide")
 @st.cache_data
 def load_data():
     try:
-        # Try finding the file in current directory or specific known paths
-        file_path = "Stock Take.xlsx" 
-        # You might want to try the absolute path from the notebook if local fails, 
-        # but for portability, we stick to current dir or let user upload
-        stock = pd.read_excel(file_path)
+        # Stock Take Sheet
+        sheet_id = "1mKcRWrkCMHXOpofdjU1MrwRmhUGaaET8RUOG6eyHAqA"
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+        stock = pd.read_excel(url)
         return stock
-    except FileNotFoundError:
+    except Exception as e:
+        # Fallback or error logging
+        st.error(f"Error loading Stock Data: {e}")
         return None
 
 def preprocess_data(stock):
+    if stock is None: return pd.DataFrame()
     # Standardize columns
     stock.columns = stock.columns.str.lower().str.strip()
     
     # Date conversion
-    stock["inventory date :"] = pd.to_datetime(stock["inventory date :"])
-    stock["month"] = stock["inventory date :"].dt.to_period("M")
+    if "inventory date :" in stock.columns:
+        stock["inventory date :"] = pd.to_datetime(stock["inventory date :"])
+        stock["month"] = stock["inventory date :"].dt.to_period("M")
     
     return stock
 
 def get_stock_summary(stock):
+    if stock.empty: return pd.DataFrame()
     # We need unique closing stock per item per month.
     # Key columns for grouping - Group by Item Code and Month ONLY for uniqueness
     group_cols = ["item code :", "month"]
@@ -53,19 +57,25 @@ def get_stock_summary(stock):
 @st.cache_data
 def load_warehouse_data():
     try:
-        file_path = "Issue Details ( AUG - DEC ).xlsx"
-        warehouse = pd.read_excel(file_path)
+        # Warehouse Issues Sheet
+        sheet_id = "1Cy0A4nQvbaW8GYlqyuiLvob-qed5Lu-GugPNGjSaGF4"
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+        warehouse = pd.read_excel(url)
         return warehouse
-    except FileNotFoundError:
+    except Exception as e:
+        st.error(f"Error loading Warehouse Data: {e}")
         return None
 
 def preprocess_warehouse(warehouse):
+    if warehouse is None: return pd.DataFrame()
     warehouse.columns = warehouse.columns.str.lower().str.strip()
-    warehouse["issue date :"] = pd.to_datetime(warehouse["issue date :"])
-    warehouse["month"] = warehouse["issue date :"].dt.to_period("M")
+    if "issue date :" in warehouse.columns:
+        warehouse["issue date :"] = pd.to_datetime(warehouse["issue date :"])
+        warehouse["month"] = warehouse["issue date :"].dt.to_period("M")
     return warehouse
 
 def get_warehouse_summary(warehouse):
+    if warehouse.empty: return pd.DataFrame()
     # Group by Item Code and Month to get total issued quantity
     group_cols = ["item code", "month"]
     
@@ -85,13 +95,19 @@ def get_warehouse_summary(warehouse):
 @st.cache_data
 def load_sales_data():
     try:
-        file_path = "Mulla House ( AUG - DEC 18 ) PetPooja.xlsx"
-        sales = pd.read_excel(file_path, sheet_name="MULLA HOUSE")
+        # Sales Data Sheet (Petpooja)
+        sheet_id = "1WOF03Jicq50xITuKeOvW2I8M-vApAlBSm5IQNLYOuFI"
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+        # Assuming Data is in 'MULLA HOUSE' sheet, or we try reading the first sheet if that fails?
+        # Keeping sheet_name="MULLA HOUSE" as per original code logic
+        sales = pd.read_excel(url, sheet_name="MULLA HOUSE")
         return sales
-    except FileNotFoundError:
+    except Exception as e:
+        st.error(f"Error loading Sales Data: {e}")
         return None
 
 def preprocess_sales(sales):
+    if sales is None: return pd.DataFrame()
     sales.columns = sales.columns.str.lower().str.strip()
     # Check for date column variations
     date_col = next((c for c in sales.columns if "date" in c), None)
@@ -125,20 +141,20 @@ def main():
     # Month Filter
     available_months = df["month"].unique().astype(str)
     available_months = sorted(available_months, reverse=True)
-    selected_month_str = st.sidebar.selectbox("Select Month", available_months)
+    selected_month_str = st.sidebar.selectbox("Select Month", available_months, key="month_select")
     selected_month = pd.Period(selected_month_str, freq="M")
     
     # Category Filter (Only show for pages that are generic)
     if page in ["Stock Overview", "Warehouse Supply", "Coffee Consumption"]:
         available_categories = df["category :"].dropna().unique()
-        selected_categories = st.sidebar.multiselect("Select Category", available_categories, default=available_categories)
+        selected_categories = st.sidebar.multiselect("Select Category", available_categories, default=available_categories, key="category_select")
         
         # Item Filter logic (shared)
         if selected_categories:
             available_items = df[df["category :"].isin(selected_categories)]["item name :"].dropna().unique()
         else:
             available_items = df["item name :"].dropna().unique()
-        selected_items = st.sidebar.multiselect("Select Item", sorted(available_items))
+        selected_items = st.sidebar.multiselect("Select Item", sorted(available_items), key="item_select")
 
     # Calculate Opening Stock (Previous Month Closing)
     previous_month = selected_month - 1
@@ -265,18 +281,23 @@ def main():
             # ---------------------------------------------------------
             # 2. INVENTORY SIDE (Actual Stock)
             # ---------------------------------------------------------
-            # Filter master_df for items that represent Cups
-            # Regex for Cup or Lid
-            all_cup_items = master_df[master_df["Item Name"].str.contains("CUP|LID", case=False, na=False)].copy()
+            # 2. INVENTORY SIDE (Actual Stock)
+            # ---------------------------------------------------------
+            # Filter master_df for items that represent Cups (Current Month)
+            current_month_cups = master_df[master_df["Item Name"].str.contains("CUP|LID", case=False, na=False)].copy()
+
+            # Global Cup List (from full history) to prevent filter reset when changing months
+            # We use 'df' which contains all months data
+            all_possible_cups = df[df["item name :"].str.contains("CUP|LID", case=False, na=False)]["item name :"].dropna().unique()
+            cup_item_names = sorted(all_possible_cups)
             
             # User Request: Select specific cup items to include
-            cup_item_names = sorted(all_cup_items["Item Name"].unique())
-            selected_cup_items = st.multiselect("Select Cup Inventory Items", cup_item_names, default=cup_item_names)
+            selected_cup_items = st.multiselect("Select Cup Inventory Items", cup_item_names, default=cup_item_names, key="cup_inventory_select")
             
             if selected_cup_items:
-                inventory_cups_df = all_cup_items[all_cup_items["Item Name"].isin(selected_cup_items)].copy()
+                inventory_cups_df = current_month_cups[current_month_cups["Item Name"].isin(selected_cup_items)].copy()
             else:
-                inventory_cups_df = all_cup_items.copy()
+                inventory_cups_df = current_month_cups.copy()
             
             total_opening = inventory_cups_df["Opening Stock"].sum()
             total_supplied = inventory_cups_df["Supplied Qty"].sum()
@@ -325,13 +346,21 @@ def main():
                 use_container_width=True
             )
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.info(f"**Missing Cups**: {missing_cups:,.0f}")
             with col2:
+                if total_supplied > 0:
+                    pct_supplied = (missing_cups / total_supplied) * 100
+                    st.metric("Missing / Supplied", f"{pct_supplied:.1f}%")
+                else:
+                    st.metric("Missing / Supplied", "N/A")
+            with col3:
                 if total_available > 0:
-                    usage_pct = (total_sales_cups / total_available) * 100
-                    st.metric("Efficiency (Sales/Available)", f"{usage_pct:.1f}%")
+                    pct_available = (missing_cups / total_available) * 100
+                    st.metric("Missing / Total Available", f"{pct_available:.1f}%")
+                else:
+                    st.metric("Missing / Total Available", "N/A")
 
             # ---------------------------------------------------------
             # DETAILED VIEWS
