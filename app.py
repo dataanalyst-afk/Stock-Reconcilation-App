@@ -247,7 +247,7 @@ def main():
                 "coffee", "cold coffee", "iced coffee", "chocolate", "hot brews [o]",
                 "tea", "manual brews", "tasteful infusions (non coffee) [o]",
                 "juices", "iced coffees [o]", "manual brews [o]",
-                "monsoon special beverages [o]", "beverages [o]", "little ones [o]"
+                "monsoon special beverages [o]", "beverages [o]", "little ones [o]", "Smoothies(o)"
             ]
             
             # Normalize sales categories
