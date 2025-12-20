@@ -320,12 +320,12 @@ def main():
             rec_data = {
                 "Metric": [
                     "Opening Stock (Inventory)", 
-                    "+ Supplied (Warehouse)", 
-                    "= Total Available", 
-                    "- Consumed (Sales Calculation)", 
-                    "= Expected Closing Stock", 
-                    "- Actual Closing Stock (Inventory)", 
-                    "= Missing / Variance"
+                    "Supplied (Warehouse)", 
+                    "Total Available", 
+                    "Consumed (Sales Calculation)", 
+                    "Expected Closing Stock", 
+                    "Actual Closing Stock (Inventory)", 
+                    "Missing / Variance"
                 ],
                 "Quantity": [
                     total_opening, 
@@ -350,11 +350,11 @@ def main():
             with col1:
                 st.info(f"**Missing Cups**: {missing_cups:,.0f}")
             with col2:
-                if total_supplied > 0:
-                    pct_supplied = (missing_cups / total_supplied) * 100
-                    st.metric("Missing / Supplied", f"{pct_supplied:.1f}%")
+                if total_sales_cups > 0:
+                    pct_sales_cups = (missing_cups / total_sales_cups) * 100
+                    st.metric("Missing / Sales Cups", f"{pct_sales_cups:.1f}%")
                 else:
-                    st.metric("Missing / Supplied", "N/A")
+                    st.metric("Missing / Sales Cups", "N/A")
             with col3:
                 if total_available > 0:
                     pct_available = (missing_cups / total_available) * 100
