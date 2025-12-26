@@ -412,30 +412,135 @@ def main():
     elif page == "Syrup Consumption":
         st.subheader(f"🍯 Syrup Consumption for {selected_month_str}")
         
-        # Filter for Syrups
-        # Trying to catch "SYRUPS, JAMS & HONEY" or similar
-        syrup_df = master_df[master_df["Category"].astype(str).str.contains("SYRUP", case=False, na=False)].copy()
+        # ---------------------------------------------------------
+        # 0. RECIPE DATA (Ported from syrup.ipynb)
+        # ---------------------------------------------------------
+        syrup_recipe_data = [
+            # Lemon Cheesecake Fizz
+            {"item_name": "Lemon Cheesecake Fizz", "syrup_name": "Cheese Cake Syrup", "ml_per_cup": 22.5},
+            {"item_name": "Lemon Cheesecake Fizz", "syrup_name": "Vanilla Syrup", "ml_per_cup": 5},
+            # Madhurai Mule
+            {"item_name": "Madhurai Mule", "syrup_name": "Ginger Syrup", "ml_per_cup": 15},
+            # Butterpop
+            {"item_name": "Butterpop", "syrup_name": "Brown Butter", "ml_per_cup": 10},
+            {"item_name": "Butterpop", "syrup_name": "Caramel", "ml_per_cup": 15},
+            {"item_name": "Butterpop", "syrup_name": "Vanilla", "ml_per_cup": 12},
+            # Pina Colada Cold Brew Tonic
+            {"item_name": "Pina Colada Cold Brew Tonic", "syrup_name": "Pina Colada Syrup", "ml_per_cup": 25},
+            # Peaches and Cream Latte (Iced)
+            {"item_name": "Peaches and Cream Latte (Iced)", "syrup_name": "Peach Syrup", "ml_per_cup": 22.5},
+            # Almond Croissant Latte
+            {"item_name": "Almond Croissant Latte", "syrup_name": "Amaretto Syrup", "ml_per_cup": 20},
+            {"item_name": "Almond Croissant Latte", "syrup_name": "Brown Bread Syrup", "ml_per_cup": 5},
+            {"item_name": "Almond Croissant Latte", "syrup_name": "Vanilla Syrup", "ml_per_cup": 5},
+        ]
+        syrup_recipe = pd.DataFrame(syrup_recipe_data)
         
-        if syrup_df.empty:
-            st.info("No Syrup items found for this month.")
+        # Standardize recipe columns
+        syrup_recipe["item_name_clean"] = syrup_recipe["item_name"].astype(str).str.lower().str.strip()
+        syrup_recipe["syrup_name_clean"] = syrup_recipe["syrup_name"].astype(str).str.lower().str.strip()
+
+        # ---------------------------------------------------------
+        # 1. SALES SIDE CALCULATION
+        # ---------------------------------------------------------
+        sales_consumption = None
+        
+        if sales_df_raw is None:
+            st.error("Sales data missing. Cannot calculate expected consumption.")
         else:
-            # Metrics
-            total_consumption = syrup_df["Consumption"].sum()
-            avg_consumption = syrup_df["Consumption"].mean()
+            sales_df = preprocess_sales(sales_df_raw)
+            # Filter Month
+            s_df = sales_df[sales_df["month"] == selected_month].copy()
             
-            col1, col2 = st.columns(2)
-            col1.metric("Total Consumption (Units/Kg)", f"{total_consumption:,.2f}")
-            col2.metric("Avg Consumption per Item", f"{avg_consumption:,.2f}")
+            # Clean Item Name for merging
+            # Find appropriate item name column
+            item_col_sales = next((c for c in s_df.columns if "item" in c and "name" in c), None)
             
-            # Chart
-            st.write("### Consumption by Item")
-            chart_data = syrup_df.set_index("Item Name")[["Consumption"]].sort_values("Consumption", ascending=False)
-            st.bar_chart(chart_data)
+            if not item_col_sales:
+                st.error("Could not find Item Name column in sales data.")
+            else:
+                s_df["item_name_clean"] = s_df[item_col_sales].astype(str).str.lower().str.strip()
+                
+                # Merge Sales with Recipe
+                # Inner join to only get items that use syrups
+                merged_df = s_df.merge(syrup_recipe, on="item_name_clean", how="inner")
+                
+                # Find qty column
+                qty_col = next((c for c in s_df.columns if c in ["qty.", "qty", "quantity"]), None)
+                if not qty_col:
+                     qty_col = next((c for c in s_df.columns if "qty" in c or "quantity" in c), "qty")
+                
+                if qty_col in merged_df.columns:
+                    # Calculate Deduction
+                    merged_df["total_ml"] = merged_df[qty_col] * merged_df["ml_per_cup"]
+                    
+                    # Group by SYRUP NAME to get total expected consumption
+                    # We group by the 'syrup_name' from the recipe to align with inventory names later
+                    sales_consumption = merged_df.groupby("syrup_name")["total_ml"].sum().reset_index()
+                    sales_consumption["Expected Consumption (L)"] = sales_consumption["total_ml"] / 1000.0
+                    
+                    # Also keep an audit detailed view
+                    audit_df = merged_df.groupby(["item_name", "syrup_name"]).agg({
+                        qty_col: "sum",
+                        "total_ml": "sum"
+                    }).reset_index().rename(columns={qty_col: "Cups Sold", "total_ml": "Total mL"})
+                    
+                else:
+                    st.error("Quantity column missing in sales data.")
+
+        # ---------------------------------------------------------
+        # 2. INVENTORY SIDE
+        # ---------------------------------------------------------
+        # Filter for Syrups in Master DF
+        syrup_inv = master_df[master_df["Category"].astype(str).str.contains("SYRUP", case=False, na=False)].copy()
+        
+        # ---------------------------------------------------------
+        # 3. MATCHING & DISPLAY
+        # ---------------------------------------------------------
+        tab1, tab2 = st.tabs(["📊 Reconciliation", "🧾 Recipe Audit"])
+        
+        with tab1:
+            if syrup_inv.empty:
+                st.info("No Syrup items found in Stock Inventory for this month.")
+            else:
+                # Prepare Inventory Data for Display
+                cols = ["Item Name", "Opening Stock", "Supplied Qty", "Total Available", "Closing Stock", "Consumption", "UOM"]
+                inv_display = syrup_inv[cols].copy()
+                inv_display.rename(columns={"Consumption": "Actual Consumption (Units)"}, inplace=True)
+                
+                # Display
+                st.write("#### Inventory vs Sales Logic")
+                st.info("Note: 'Expected Consumption' is calculated in **Liters** from recipes. 'Actual Consumption' is in **Units** (e.g. Bottles) from inventory.")
+                
+                col_inv, col_sales = st.columns(2)
+                
+                with col_inv:
+                    st.write("**Inventory Actuals**")
+                    st.dataframe(
+                        inv_display.sort_values("Actual Consumption (Units)", ascending=False).style.background_gradient(subset=["Actual Consumption (Units)"], cmap="Reds"), 
+                        use_container_width=True
+                    )
+                    
+                with col_sales:
+                    st.write("**Sales Derived Demand**")
+                    if sales_consumption is not None and not sales_consumption.empty:
+                        st.dataframe(
+                            sales_consumption[["syrup_name", "Expected Consumption (L)"]].sort_values("Expected Consumption (L)", ascending=False).style.format({"Expected Consumption (L)": "{:.2f}"}), 
+                            use_container_width=True
+                        )
+                    else:
+                        st.write("No matching sales data found.")
+
+        with tab2:
+            st.write("#### Items Sold that use Syrups")
+            if sales_consumption is not None:
+                st.dataframe(audit_df, use_container_width=True)
+            else:
+                st.write("No sales data available to audit.")
             
-            # Detailed Table
-            st.write("### Detailed Breakdown")
-            cols = ["Item Name", "Opening Stock", "Supplied Qty", "Total Available", "Closing Stock", "Consumption", "UOM"]
-            st.dataframe(syrup_df[cols].style.background_gradient(subset=["Consumption"], cmap="Reds"), use_container_width=True)
+            st.divider()
+            st.write("#### Active Recipes")
+            st.dataframe(syrup_recipe, use_container_width=True)
 
 if __name__ == "__main__":
     main()
