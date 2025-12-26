@@ -120,7 +120,7 @@ def main():
     st.title("Stock Opening & Closing Checker")
     
     # Sidebar Navigation
-    page = st.sidebar.radio("Navigate", ["Stock Overview", "Warehouse Supply", "Coffee Consumption", "Cup Consumption"])
+    page = st.sidebar.radio("Navigate", ["Stock Overview", "Warehouse Supply", "Coffee Consumption", "Syrup Consumption", "Cup Consumption"])
     
     # Load Data
     raw_df = load_data()
@@ -145,7 +145,7 @@ def main():
     selected_month = pd.Period(selected_month_str, freq="M")
     
     # Category Filter (Only show for pages that are generic)
-    if page in ["Stock Overview", "Warehouse Supply", "Coffee Consumption"]:
+    if page in ["Stock Overview", "Warehouse Supply", "Coffee Consumption", "Syrup Consumption"]:
         available_categories = df["category :"].dropna().unique()
         selected_categories = st.sidebar.multiselect("Select Category", available_categories, default=available_categories, key="category_select")
         
@@ -408,6 +408,34 @@ def main():
             st.write("### Detailed Breakdown")
             cols = ["Item Name", "Opening Stock", "Supplied Qty", "Total Available", "Closing Stock", "Consumption", "UOM"]
             st.dataframe(coffee_df[cols].style.background_gradient(subset=["Consumption"], cmap="Reds"), use_container_width=True)
+
+    elif page == "Syrup Consumption":
+        st.subheader(f"🍯 Syrup Consumption for {selected_month_str}")
+        
+        # Filter for Syrups
+        # Trying to catch "SYRUPS, JAMS & HONEY" or similar
+        syrup_df = master_df[master_df["Category"].astype(str).str.contains("SYRUP", case=False, na=False)].copy()
+        
+        if syrup_df.empty:
+            st.info("No Syrup items found for this month.")
+        else:
+            # Metrics
+            total_consumption = syrup_df["Consumption"].sum()
+            avg_consumption = syrup_df["Consumption"].mean()
+            
+            col1, col2 = st.columns(2)
+            col1.metric("Total Consumption (Units/Kg)", f"{total_consumption:,.2f}")
+            col2.metric("Avg Consumption per Item", f"{avg_consumption:,.2f}")
+            
+            # Chart
+            st.write("### Consumption by Item")
+            chart_data = syrup_df.set_index("Item Name")[["Consumption"]].sort_values("Consumption", ascending=False)
+            st.bar_chart(chart_data)
+            
+            # Detailed Table
+            st.write("### Detailed Breakdown")
+            cols = ["Item Name", "Opening Stock", "Supplied Qty", "Total Available", "Closing Stock", "Consumption", "UOM"]
+            st.dataframe(syrup_df[cols].style.background_gradient(subset=["Consumption"], cmap="Reds"), use_container_width=True)
 
 if __name__ == "__main__":
     main()
