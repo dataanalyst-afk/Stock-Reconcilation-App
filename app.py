@@ -416,20 +416,14 @@ def main():
         # 0. RECIPE DATA
         # ---------------------------------------------------------
         syrup_recipe_data = [
-            # Lemon Cheesecake Fizz
             {"item_name": "Lemon Cheesecake Fizz", "syrup_name": "Cheese Cake Syrup", "ml_per_cup": 22.5},
             {"item_name": "Lemon Cheesecake Fizz", "syrup_name": "Vanilla Syrup", "ml_per_cup": 5},
-            # Madhurai Mule
             {"item_name": "Madhurai Mule", "syrup_name": "Ginger Syrup", "ml_per_cup": 15},
-            # Butterpop
             {"item_name": "Butterpop", "syrup_name": "Brown Butter", "ml_per_cup": 10},
             {"item_name": "Butterpop", "syrup_name": "Caramel", "ml_per_cup": 15},
             {"item_name": "Butterpop", "syrup_name": "Vanilla", "ml_per_cup": 12},
-            # Pina Colada Cold Brew Tonic
             {"item_name": "Pina Colada Cold Brew Tonic", "syrup_name": "Pina Colada Syrup", "ml_per_cup": 25},
-            # Peaches and Cream Latte (Iced)
             {"item_name": "Peaches and Cream Latte (Iced)", "syrup_name": "Peach Syrup", "ml_per_cup": 22.5},
-            # Almond Croissant Latte
             {"item_name": "Almond Croissant Latte", "syrup_name": "Amaretto Syrup", "ml_per_cup": 20},
             {"item_name": "Almond Croissant Latte", "syrup_name": "Brown Bread Syrup", "ml_per_cup": 5},
             {"item_name": "Almond Croissant Latte", "syrup_name": "Vanilla Syrup", "ml_per_cup": 5},
@@ -438,7 +432,7 @@ def main():
         syrup_recipe["item_name_clean"] = syrup_recipe["item_name"].astype(str).str.lower().str.strip()
 
         # ---------------------------------------------------------
-        # 1. SALES CALCULATION
+        # 1. CALCULATE CONSUMPTION (From Sales)
         # ---------------------------------------------------------
         sales_consumption = None
         if sales_df_raw is not None:
@@ -457,30 +451,29 @@ def main():
                     sales_consumption["Sales Consumption (L)"] = sales_consumption["total_ml"] / 1000.0
 
         # ---------------------------------------------------------
-        # 2. INVENTORY & RECONCILIATION
+        # 2. INVENTORY PREP
         # ---------------------------------------------------------
         syrup_inv = master_df[master_df["Category"].astype(str).str.contains("SYRUP", case=False, na=False)].copy()
         
         if syrup_inv.empty:
             st.info("No Syrups in Inventory.")
         else:
-            # Bottle Size Logic
+            # Bottle Size
             def get_bottle_size_ml(item_name):
                 name = str(item_name).upper()
                 if "1 LTR" in name or "1LTR" in name: return 1000.0
                 if "700" in name: return 700.0
                 if "250" in name: return 250.0
-                return 700.0 # Default
+                return 700.0
             
             syrup_inv["Bottle Size (ml)"] = syrup_inv["Item Name"].apply(get_bottle_size_ml)
             
-            # Convert to Liters
+            # --- Convert Everything to Liters ---
             syrup_inv["Opening Stock (L)"] = (syrup_inv["Opening Stock"] * syrup_inv["Bottle Size (ml)"]) / 1000.0
-            syrup_inv["Supplied (L)"] = (syrup_inv["Supplied Qty"] * syrup_inv["Bottle Size (ml)"]) / 1000.0
-            syrup_inv["Total Available (L)"] = syrup_inv["Opening Stock (L)"] + syrup_inv["Supplied (L)"]
-            syrup_inv["Actual Closing (L)"] = (syrup_inv["Closing Stock"] * syrup_inv["Bottle Size (ml)"]) / 1000.0
+            syrup_inv["Supplied Qty (L)"] = (syrup_inv["Supplied Qty"] * syrup_inv["Bottle Size (ml)"]) / 1000.0
+            syrup_inv["Total Available (L)"] = syrup_inv["Opening Stock (L)"] + syrup_inv["Supplied Qty (L)"]
             
-            # Fuzzy Map Key
+            # Fuzzy Map
             def clean_name_for_map(name):
                 import re
                 name = str(name).upper()
@@ -494,42 +487,45 @@ def main():
             if sales_consumption is not None:
                 sales_consumption["join_key"] = sales_consumption["syrup_name"].apply(clean_name_for_map)
                 
-                # Merge
+                # Merge Sales Consumption into Inventory
                 merged = syrup_inv.merge(sales_consumption[["join_key", "Sales Consumption (L)"]], on="join_key", how="left")
                 merged["Sales Consumption (L)"] = merged["Sales Consumption (L)"].fillna(0)
                 
-                # Logic: Expected Closing = Total - Sales
-                merged["Theoretical Closing (L)"] = merged["Total Available (L)"] - merged["Sales Consumption (L)"]
-                merged["Difference (L)"] = merged["Theoretical Closing (L)"] - merged["Actual Closing (L)"]
+                # ---------------------------------------------------------
+                # 3. FINAL LOGIC: DEDUCT RECIPE CONSUMPTION
+                # ---------------------------------------------------------
+                # Closing Stock = Total Available - Consumption
+                merged["Closing Stock (L)"] = merged["Total Available (L)"] - merged["Sales Consumption (L)"]
                 
-                # Display
-                st.caption("All values in Liters (L). Bottle sizes are inferred (Default 700ml or 1L).")
+                # Rename for Display to match request
+                # Request: syrup name , supplied qty , total available , closing stock , consumption
+                final_df = merged.rename(columns={
+                    "Item Name": "Syrup Name",
+                    "Supplied Qty (L)": "Supplied Qty (L)",
+                    "Total Available (L)": "Total Available (L)",
+                    "Sales Consumption (L)": "Consumption (L)",
+                    "Closing Stock (L)": "Closing Stock (L)"
+                })
+                
+                st.caption("Values are in **Liters**. 'Closing Stock' is the calculated remaining stock after deducting recipe-based consumption.")
                 
                 disp_cols = [
-                    "Item Name", 
-                    "Opening Stock (L)", 
-                    "Supplied (L)", 
+                    "Syrup Name", 
+                    "Supplied Qty (L)", 
                     "Total Available (L)", 
-                    "Sales Consumption (L)", 
-                    "Theoretical Closing (L)", 
-                    "Actual Closing (L)", 
-                    "Difference (L)"
+                    "Consumption (L)",
+                    "Closing Stock (L)"
                 ]
                 
-                # Formatting
                 st.dataframe(
-                    merged[disp_cols].sort_values("Sales Consumption (L)", ascending=False)
+                    final_df[disp_cols].sort_values("Consumption (L)", ascending=False)
                     .style.format("{:.2f}")
-                    .background_gradient(subset=["Difference (L)"], cmap="RdYlGn", vmin=-5, vmax=5),
+                    .background_gradient(subset=["Closing Stock (L)"], cmap="Blues"),
                     use_container_width=True
                 )
                 
-                # KPI
-                total_diff = merged["Difference (L)"].sum()
-                st.metric("Total Variance (Litres)", f"{total_diff:,.2f} L")
-                
             else:
-                st.warning("Could not calculate sales consumption.")
+                st.warning("Sales data missing/mismatch.")
                 st.dataframe(syrup_inv)
 
 if __name__ == "__main__":
