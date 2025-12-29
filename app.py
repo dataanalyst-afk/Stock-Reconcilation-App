@@ -410,10 +410,10 @@ def main():
             st.dataframe(coffee_df[cols].style.background_gradient(subset=["Consumption"], cmap="Reds"), use_container_width=True)
 
     elif page == "Syrup Consumption":
-        st.subheader(f"🍯 Syrup Consumption for {selected_month_str}")
+        st.subheader(f"🍯 Syrup Reconciliation for {selected_month_str}")
         
         # ---------------------------------------------------------
-        # 0. RECIPE DATA (Ported from syrup.ipynb)
+        # 0. RECIPE DATA
         # ---------------------------------------------------------
         syrup_recipe_data = [
             # Lemon Cheesecake Fizz
@@ -436,108 +436,101 @@ def main():
         ]
         syrup_recipe = pd.DataFrame(syrup_recipe_data)
         syrup_recipe["item_name_clean"] = syrup_recipe["item_name"].astype(str).str.lower().str.strip()
-        syrup_recipe["syrup_name_clean"] = syrup_recipe["syrup_name"].astype(str).str.lower().str.strip()
 
         # ---------------------------------------------------------
-        # 1. SALES LOGIC (Calculate Theoretical Consumption)
+        # 1. SALES CALCULATION
         # ---------------------------------------------------------
         sales_consumption = None
-        if sales_df_raw is None:
-            st.error("Sales data missing.")
-        else:
+        if sales_df_raw is not None:
             sales_df = preprocess_sales(sales_df_raw)
-            # Filter Month
             s_df = sales_df[sales_df["month"] == selected_month].copy()
             
-            # Clean Item Name for merging
-            # Find appropriate item name column
             item_col_sales = next((c for c in s_df.columns if "item" in c and "name" in c), None)
-            
-            if not item_col_sales:
-                st.error("Could not find Item Name column in sales data.")
-            else:
+            if item_col_sales:
                 s_df["item_name_clean"] = s_df[item_col_sales].astype(str).str.lower().str.strip()
-                
-                # Merge Sales with Recipe
-                # Inner join to only get items that use syrups
                 merged_df = s_df.merge(syrup_recipe, on="item_name_clean", how="inner")
                 
-                # Find qty column
-                qty_col = next((c for c in s_df.columns if c in ["qty.", "qty", "quantity"]), None)
-                if not qty_col:
-                     qty_col = next((c for c in s_df.columns if "qty" in c or "quantity" in c), "qty")
-                
+                qty_col = next((c for c in s_df.columns if c in ["qty.", "qty", "quantity"]), "qty")
                 if qty_col in merged_df.columns:
-                    # Calculate Deduction
                     merged_df["total_ml"] = merged_df[qty_col] * merged_df["ml_per_cup"]
-                    
-                    # Group by SYRUP NAME to get total expected consumption
-                    # We group by the 'syrup_name' from the recipe to align with inventory names later
                     sales_consumption = merged_df.groupby("syrup_name")["total_ml"].sum().reset_index()
-                    sales_consumption["Expected Consumption (L)"] = sales_consumption["total_ml"] / 1000.0
-                    
-                    # Also keep an audit detailed view
-                    audit_df = merged_df.groupby(["item_name", "syrup_name"]).agg({
-                        qty_col: "sum",
-                        "total_ml": "sum"
-                    }).reset_index().rename(columns={qty_col: "Cups Sold", "total_ml": "Total mL"})
-                    
-                else:
-                    st.error("Quantity column missing in sales data.")
+                    sales_consumption["Sales Consumption (L)"] = sales_consumption["total_ml"] / 1000.0
 
         # ---------------------------------------------------------
-        # 2. INVENTORY SIDE
+        # 2. INVENTORY & RECONCILIATION
         # ---------------------------------------------------------
-        # Filter for Syrups in Master DF
         syrup_inv = master_df[master_df["Category"].astype(str).str.contains("SYRUP", case=False, na=False)].copy()
         
-        # ---------------------------------------------------------
-        # 3. MATCHING & DISPLAY
-        # ---------------------------------------------------------
-        tab1, tab2 = st.tabs(["📊 Reconciliation", "🧾 Recipe Audit"])
-        
-        with tab1:
-            if syrup_inv.empty:
-                st.info("No Syrup items found in Stock Inventory for this month.")
-            else:
-                # Prepare Inventory Data for Display
-                cols = ["Item Name", "Opening Stock", "Supplied Qty", "Total Available", "Closing Stock", "Consumption", "UOM"]
-                inv_display = syrup_inv[cols].copy()
-                inv_display.rename(columns={"Consumption": "Actual Consumption (Units)"}, inplace=True)
+        if syrup_inv.empty:
+            st.info("No Syrups in Inventory.")
+        else:
+            # Bottle Size Logic
+            def get_bottle_size_ml(item_name):
+                name = str(item_name).upper()
+                if "1 LTR" in name or "1LTR" in name: return 1000.0
+                if "700" in name: return 700.0
+                if "250" in name: return 250.0
+                return 700.0 # Default
+            
+            syrup_inv["Bottle Size (ml)"] = syrup_inv["Item Name"].apply(get_bottle_size_ml)
+            
+            # Convert to Liters
+            syrup_inv["Opening Stock (L)"] = (syrup_inv["Opening Stock"] * syrup_inv["Bottle Size (ml)"]) / 1000.0
+            syrup_inv["Supplied (L)"] = (syrup_inv["Supplied Qty"] * syrup_inv["Bottle Size (ml)"]) / 1000.0
+            syrup_inv["Total Available (L)"] = syrup_inv["Opening Stock (L)"] + syrup_inv["Supplied (L)"]
+            syrup_inv["Actual Closing (L)"] = (syrup_inv["Closing Stock"] * syrup_inv["Bottle Size (ml)"]) / 1000.0
+            
+            # Fuzzy Map Key
+            def clean_name_for_map(name):
+                import re
+                name = str(name).upper()
+                name = re.sub(r"\(.*?\)", "", name)
+                for word in ["MONIN", "SYRUP", "1", "LTR", "ML", " "]:
+                    name = name.replace(word, "")
+                return name.strip()
+
+            syrup_inv["join_key"] = syrup_inv["Item Name"].apply(clean_name_for_map)
+            
+            if sales_consumption is not None:
+                sales_consumption["join_key"] = sales_consumption["syrup_name"].apply(clean_name_for_map)
+                
+                # Merge
+                merged = syrup_inv.merge(sales_consumption[["join_key", "Sales Consumption (L)"]], on="join_key", how="left")
+                merged["Sales Consumption (L)"] = merged["Sales Consumption (L)"].fillna(0)
+                
+                # Logic: Expected Closing = Total - Sales
+                merged["Theoretical Closing (L)"] = merged["Total Available (L)"] - merged["Sales Consumption (L)"]
+                merged["Difference (L)"] = merged["Theoretical Closing (L)"] - merged["Actual Closing (L)"]
                 
                 # Display
-                st.write("#### Inventory vs Sales Logic")
-                st.info("Note: 'Expected Consumption' is calculated in **Liters** from recipes. 'Actual Consumption' is in **Units** (e.g. Bottles) from inventory.")
+                st.caption("All values in Liters (L). Bottle sizes are inferred (Default 700ml or 1L).")
                 
-                col_inv, col_sales = st.columns(2)
+                disp_cols = [
+                    "Item Name", 
+                    "Opening Stock (L)", 
+                    "Supplied (L)", 
+                    "Total Available (L)", 
+                    "Sales Consumption (L)", 
+                    "Theoretical Closing (L)", 
+                    "Actual Closing (L)", 
+                    "Difference (L)"
+                ]
                 
-                with col_inv:
-                    st.write("**Inventory Actuals**")
-                    st.dataframe(
-                        inv_display.sort_values("Actual Consumption (Units)", ascending=False).style.background_gradient(subset=["Actual Consumption (Units)"], cmap="Reds"), 
-                        use_container_width=True
-                    )
-                    
-                with col_sales:
-                    st.write("**Sales Derived Demand**")
-                    if sales_consumption is not None and not sales_consumption.empty:
-                        st.dataframe(
-                            sales_consumption[["syrup_name", "Expected Consumption (L)"]].sort_values("Expected Consumption (L)", ascending=False).style.format({"Expected Consumption (L)": "{:.2f}"}), 
-                            use_container_width=True
-                        )
-                    else:
-                        st.write("No matching sales data found.")
-
-        with tab2:
-            st.write("#### Items Sold that use Syrups")
-            if sales_consumption is not None:
-                st.dataframe(audit_df, use_container_width=True)
+                # Formatting
+                st.dataframe(
+                    merged[disp_cols].sort_values("Sales Consumption (L)", ascending=False)
+                    .style.format("{:.2f}")
+                    .background_gradient(subset=["Difference (L)"], cmap="RdYlGn", vmin=-5, vmax=5),
+                    use_container_width=True
+                )
+                
+                # KPI
+                total_diff = merged["Difference (L)"].sum()
+                st.metric("Total Variance (Litres)", f"{total_diff:,.2f} L")
+                
             else:
-                st.write("No sales data available to audit.")
-            
-            st.divider()
-            st.write("#### Active Recipes")
-            st.dataframe(syrup_recipe, use_container_width=True)
+                st.warning("Could not calculate sales consumption.")
+                st.dataframe(syrup_inv)
 
 if __name__ == "__main__":
     main()
