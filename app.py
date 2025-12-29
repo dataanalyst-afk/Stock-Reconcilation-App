@@ -435,18 +435,15 @@ def main():
             {"item_name": "Almond Croissant Latte", "syrup_name": "Vanilla Syrup", "ml_per_cup": 5},
         ]
         syrup_recipe = pd.DataFrame(syrup_recipe_data)
-        
-        # Standardize recipe columns
         syrup_recipe["item_name_clean"] = syrup_recipe["item_name"].astype(str).str.lower().str.strip()
         syrup_recipe["syrup_name_clean"] = syrup_recipe["syrup_name"].astype(str).str.lower().str.strip()
 
         # ---------------------------------------------------------
-        # 1. SALES SIDE CALCULATION
+        # 1. SALES LOGIC (Calculate Theoretical Consumption)
         # ---------------------------------------------------------
         sales_consumption = None
-        
         if sales_df_raw is None:
-            st.error("Sales data missing. Cannot calculate expected consumption.")
+            st.error("Sales data missing.")
         else:
             sales_df = preprocess_sales(sales_df_raw)
             # Filter Month
