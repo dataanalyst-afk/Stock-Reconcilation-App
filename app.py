@@ -427,7 +427,14 @@ def main():
             {"item_name": "Almond Croissant Latte", "syrup_name": "Amaretto Syrup", "ml_per_cup": 20},
             {"item_name": "Almond Croissant Latte", "syrup_name": "Brown Bread Syrup", "ml_per_cup": 5},
             {"item_name": "Almond Croissant Latte", "syrup_name": "Vanilla Syrup", "ml_per_cup": 5},
-        ]
+            {"item_name": "Banana Bread Latte", "syrup_name": "Banana Beverage Blend Syrup", "ml_per_cup": 20},
+            {"item_name": "Banana Bread Latte", "syrup_name": "Vanilla Syrup", "ml_per_cup": 4},
+            {"item_name": "Banana Bread Latte", "syrup_name": "Liquid Jaggery", "ml_per_cup": 5},
+            {"item_name": "Christmas in the cup", "syrup_name": "Vanilla Syrup", "ml_per_cup": 15},
+            {"item_name": "Raspberry Matcha", "syrup_name": "Raspberry Syrup", "ml_per_cup": 20},
+            {"item_name": "Salted Honey Matcha", "syrup_name": "Honey Syrup", "ml_per_cup": 20},
+            {"item_name": "Miso Salted Caramel", "syrup_name": "Caramel Syrup", "ml_per_cup": 21.5}
+]
         syrup_recipe = pd.DataFrame(syrup_recipe_data)
         syrup_recipe["item_name_clean"] = syrup_recipe["item_name"].astype(str).str.lower().str.strip()
 
