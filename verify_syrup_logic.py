@@ -156,3 +156,82 @@ if selected_month:
     cols = ["Item Name", "Opening Stock", "Supplied Qty", "Total Available", "Closing Stock", "Consumption", "UOM"]
     syrup_final = syrup_df[cols].sort_values("Consumption", ascending=False)
     print(syrup_final.to_string())
+
+# --- RECONCILIATION VERIFICATION ---
+
+def normalize_name(name):
+    if not isinstance(name, str): return ""
+    # Remove common noise words
+    noise = ["monin", "syrup", "700ml", "1ltr", "bottle", " ", "-"]
+    clean = name.lower()
+    for n in noise:
+        clean = clean.replace(n, "")
+    return clean
+
+print("\nPerforming Reconciliation Verification...")
+
+# Load Sales
+sales = pd.read_excel(
+    "C:\\Yaraman(Data-Analyst)\\Coffee Consumption\\Mulla House ( AUG - DEC 18 ) PetPooja.xlsx",
+    sheet_name='MULLA HOUSE'
+)
+sales.columns = sales.columns.str.lower().str.strip()
+
+# Recipe Data (Values from notebook view)
+syrup_recipe = pd.DataFrame([
+    {"item_name": "Lemon Cheesecake Fizz", "syrup_name": "Cheese Cake Syrup", "ml_per_cup": 22.5},
+    {"item_name": "Lemon Cheesecake Fizz", "syrup_name": "Vanilla Syrup", "ml_per_cup": 5},
+    {"item_name": "Madhurai Mule", "syrup_name": "Ginger Syrup", "ml_per_cup": 15},
+    {"item_name": "Butterpop", "syrup_name": "Brown Butter", "ml_per_cup": 10},
+    {"item_name": "Butterpop", "syrup_name": "Caramel", "ml_per_cup": 15},
+    {"item_name": "Butterpop", "syrup_name": "Vanilla", "ml_per_cup": 12},
+    {"item_name": "Pina Colada Cold Brew Tonic", "syrup_name": "Pina Colada Syrup", "ml_per_cup": 25},
+    {"item_name": "Peaches and Cream Latte (Iced)", "syrup_name": "Peach Syrup", "ml_per_cup": 22.5},
+    {"item_name": "Almond Croissant Latte", "syrup_name": "Amaretto Syrup", "ml_per_cup": 20},
+    {"item_name": "Almond Croissant Latte", "syrup_name": "Brown Bread Syrup", "ml_per_cup": 5},
+    {"item_name": "Almond Croissant Latte", "syrup_name": "Vanilla Syrup", "ml_per_cup": 5},
+])
+syrup_recipe.columns = syrup_recipe.columns.str.lower().str.strip()
+
+# Clean
+sales["item_name_clean"] = sales["item name"].astype(str).str.lower().str.strip()
+syrup_recipe["item_name_clean"] = syrup_recipe["item_name"].str.lower().str.strip()
+
+# Merge
+df_sales = sales.merge(syrup_recipe, on="item_name_clean", how="inner")
+df_sales["syrup_ml_deducted"] = df_sales["qty."] * df_sales["ml_per_cup"]
+
+syrup_deduction = df_sales.groupby("syrup_name", as_index=False)["syrup_ml_deducted"].sum()
+syrup_deduction["syrup_liters_deducted"] = syrup_deduction["syrup_ml_deducted"] / 1000
+
+# Now Reconcile
+theo_df = syrup_deduction.copy()
+theo_df["match_key"] = theo_df["syrup_name"].apply(normalize_name)
+
+actual_df = syrup_final.copy()
+# Reset Filter for verification context if needed, but syrup_final should be ready
+actual_df["match_key"] = actual_df["Item Name"].apply(normalize_name)
+
+def get_conversion_factor(row):
+    name = str(row['Item Name']).lower()
+    if '1ltr' in name or '1000ml' in name:
+        return 1.0
+    if '250ml' in name:
+        return 0.25
+    return 0.7
+
+actual_df["conv_factor"] = actual_df.apply(get_conversion_factor, axis=1)
+actual_df["Actual Liters"] = actual_df["Consumption"] * actual_df["conv_factor"]
+
+merged = pd.merge(actual_df, theo_df, on="match_key", how="outer", suffixes=("_inv", "_recipe"))
+merged["Syrup Name"] = merged["Item Name"].fillna(merged["syrup_name"])
+
+cols = ["Syrup Name", "Opening Stock", "Supplied Qty", "Closing Stock", "Actual Liters", "syrup_liters_deducted"]
+report = merged[cols].copy()
+report.rename(columns={"syrup_liters_deducted": "Expected Liters (Sales)", "Actual Liters": "Actual Liters (Stock)"}, inplace=True)
+report.fillna(0, inplace=True)
+report["Variance (Liters)"] = report["Actual Liters (Stock)"] - report["Expected Liters (Sales)"]
+
+print("\n⚖️ SYRUP VARIANCE REPORT (Liters)")
+report = report.sort_values("Variance (Liters)", ascending=False)
+print(report.to_string())
